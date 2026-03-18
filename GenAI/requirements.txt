@@ -24,3 +24,14 @@ faiss-cpu
 beautifulsoup4
 langchain-classic
 streamlit
+openai
+fastapi
+uvicorn
+langserve
+sse_starlette
+langchain-google-genai
+evalulate
+ollama
+gradio
+duckduckgo-search
+ddgs
