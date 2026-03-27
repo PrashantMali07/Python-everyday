@@ -35,3 +35,8 @@ ollama
 gradio
 duckduckgo-search
 ddgs
+mysql-connector-python
+validators
+youtube_transcript_api
+unstructured
+pytube
