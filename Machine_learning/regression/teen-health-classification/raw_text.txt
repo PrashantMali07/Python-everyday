@@ -1,0 +1,205 @@
+This is an excellent analysis of your feature selection metrics. The statistical tests are giving you incredibly clear signals, but there is a major trap hidden in these numbers—specifically regarding **target leakage** and structural differences between how the classification and regression models see the data.
+
+Here is a breakdown of what the numbers are telling you, why they differ, and exactly which features you should select.
+
+---
+
+## 1. The Regression Target (`mental_health_risk_score`)
+
+Looking at your `F-Regression` and `Mutual Info` summary, three features completely dominate:
+
+1. **`anxiety_level`**
+2. **`stress_level`**
+3. **`addiction_level`**
+
+They have massive F-statistics (above 600) and high Mutual Information scores (~0.23). Every other feature drops sharply down to near-zero importance.
+
+### 🚨 The Target Leakage Warning
+
+Look closely at feature #13: `depression_label_1` has a high F-statistic ($43.2$) against the risk score. This proves that `mental_health_risk_score` is a highly derived index column computed directly from a patient's individual anxiety, stress, addiction, and depression metrics.
+
+* **If you include them:** Your model will get a 99% $R^2$ score easily, but it will be a useless model because it's just doing basic arithmetic to reconstruct a score from its exact ingredients.
+* **If your goal is predictive modeling:** You must drop `anxiety_level`, `stress_level`, `addiction_level`, and `depression_label` to force the model to look at the **underlying behaviors** (sleep, screen time, social habits).
+
+---
+
+## 2. The Classification Target (`depression_label`)
+
+When switching to classification, the statistical landscape changes completely. Look at the top numerical variables from your ANOVA test:
+
+1. **`sleep_hours`** ($F = 45.17$)
+2. **`daily_social_media_hours`** ($F = 37.93$)
+3. **`stress_level`** / **`anxiety_level`** (~$35$)
+
+And your Chi-Square test points to a clear categorical winner:
+
+* **`sleep_quality`** ($\chi^2 = 47.73$)
+
+Notice how `addiction_level` completely fails here ($p\text{-value} = 0.6292$), even though it was incredibly important for the regression risk score. This tells us that addiction drives the overall risk index, but **sleep disruption** and **social media consumption** are the core drivers specifically linked to the `depression_label`.
+
+---
+
+## 3. Final Recommendation: Which Features to Keep?
+
+Based on these tests, keeping **5 to 6 core features** is the mathematically optimal choice to prevent overfitting.
+
+Depending on your goal, you should choose one of these two feature sets:
+
+### Scenario A: Building a Behavioral/Predictive Model (Highly Recommended)
+
+If you want a model that can predict risk based on a student's daily lifestyle habits (without needing a clinical evaluation of their anxiety/stress first):
+
+| Selected Feature | Data Type | Statistical Justification |
+| --- | --- | --- |
+| **`sleep_hours`** | Numerical | Top predictor in ANOVA ($p \approx 0.000$) |
+| **`sleep_quality`** | Categorical | Strongest categorical feature in Chi-Square ($p \approx 0.000$) |
+| **`daily_social_media_hours`** | Numerical | Extremely high importance in both ANOVA and MI |
+| **`screen_time_before_sleep`** | Numerical | Included due to logical coupling with sleep disruption |
+| **`academic_performance`** | Numerical | Keep only if evaluating school-context impact |
+
+* **What to drop:** Drop `stress_level`, `anxiety_level`, `addiction_level`, and all `digital_wellbeing` flags to eliminate target leakage. Also drop `gender`, `age`, and `platform_usage` as their $p$-values are well above $0.05$, meaning they have no statistical relationship to the target.
+
+### Scenario B: Building a Clinical Assessment Model
+
+If you are strictly trying to map how clinical psychological symptoms compound together into depression or a total risk index:
+
+* **Keep these 4:** `anxiety_level`, `stress_level`, `addiction_level`, and `sleep_hours`.
+* **Drop everything else:** All other lifestyle variables fade into statistical noise compared to these heavy hitters.
+
+### Summary Verdict
+
+Go with **Scenario A**. Select `sleep_hours`, `sleep_quality`, `daily_social_media_hours`, and `screen_time_before_sleep`. This gives you a highly robust, action-oriented model that focuses entirely on a teen's modifiable habits rather than circular logic!
+
+--------------------------------------------------------------
+
+"""
+Forward & Backward Feature Selection for Regression
+=====================================================
+Two approaches shown:
+1. scikit-learn's SequentialFeatureSelector (fast, production-friendly)
+2. Manual statsmodels version using p-values (interpretable, classic stats approach)
+"""
+
+import pandas as pd
+import numpy as np
+from sklearn.datasets import load_diabetes
+from sklearn.linear_model import LinearRegression
+from sklearn.feature_selection import SequentialFeatureSelector
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score
+
+# ------------------------------------------------------------------
+# 0. Load sample data (bundled locally with scikit-learn, no download)
+# ------------------------------------------------------------------
+data = load_diabetes(as_frame=True)
+X = data.data
+y = data.target
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+print("Features available:", list(X.columns))
+
+# ==================================================================
+# APPROACH 1: scikit-learn SequentialFeatureSelector
+# ==================================================================
+
+model = LinearRegression()
+
+# ---- Forward Selection ----
+forward_selector = SequentialFeatureSelector(
+    model,
+    n_features_to_select="auto",   # or an int, e.g. 4
+    direction="forward",
+    scoring="r2",
+    cv=5
+)
+forward_selector.fit(X_train, y_train)
+
+forward_features = X_train.columns[forward_selector.get_support()].tolist()
+print("\n[Forward Selection] Selected features:", forward_features)
+
+# Evaluate
+model.fit(X_train[forward_features], y_train)
+preds = model.predict(X_test[forward_features])
+print("[Forward Selection] Test R2:", round(r2_score(y_test, preds), 4))
+
+# ---- Backward Selection ----
+backward_selector = SequentialFeatureSelector(
+    model,
+    n_features_to_select="auto",
+    direction="backward",
+    scoring="r2",
+    cv=5
+)
+backward_selector.fit(X_train, y_train)
+
+backward_features = X_train.columns[backward_selector.get_support()].tolist()
+print("\n[Backward Selection] Selected features:", backward_features)
+
+model.fit(X_train[backward_features], y_train)
+preds = model.predict(X_test[backward_features])
+print("[Backward Selection] Test R2:", round(r2_score(y_test, preds), 4))
+
+
+# ==================================================================
+# APPROACH 2: Manual p-value based selection (statsmodels)
+# ==================================================================
+import statsmodels.api as sm
+
+
+def forward_selection_pvalue(X, y, significance_level=0.05):
+    """
+    Add features one at a time — always the one that improves fit most —
+    as long as it's statistically significant (p < significance_level).
+    """
+    initial_features = list(X.columns)
+    selected_features = []
+
+    while initial_features:
+        remaining = list(set(initial_features) - set(selected_features))
+        pvalues = pd.Series(index=remaining, dtype=float)
+
+        for feature in remaining:
+            model = sm.OLS(
+                y, sm.add_constant(X[selected_features + [feature]])
+            ).fit()
+            pvalues[feature] = model.pvalues[feature]
+
+        min_pvalue = pvalues.min()
+        if min_pvalue < significance_level:
+            best_feature = pvalues.idxmin()
+            selected_features.append(best_feature)
+        else:
+            break
+
+    return selected_features
+
+
+def backward_selection_pvalue(X, y, significance_level=0.05):
+    """
+    Start with all features, remove the least significant one at a time
+    until everything remaining is statistically significant.
+    """
+    features = list(X.columns)
+
+    while len(features) > 0:
+        model = sm.OLS(y, sm.add_constant(X[features])).fit()
+        pvalues = model.pvalues.iloc[1:]  # exclude intercept
+        max_pvalue = pvalues.max()
+
+        if max_pvalue > significance_level:
+            worst_feature = pvalues.idxmax()
+            features.remove(worst_feature)
+        else:
+            break
+
+    return features
+
+
+fwd_pval_features = forward_selection_pvalue(X_train, y_train)
+print("\n[Forward Selection - p-value] Selected features:", fwd_pval_features)
+
+bwd_pval_features = backward_selection_pvalue(X_train, y_train)
+print("[Backward Selection - p-value] Selected features:", bwd_pval_features)
