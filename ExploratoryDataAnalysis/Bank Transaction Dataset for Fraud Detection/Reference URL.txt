@@ -1,0 +1,3 @@
+https://www.kaggle.com/datasets/valakhorasani/bank-transaction-dataset-for-fraud-detection/data
+https://www.kaggle.com/code/sulaniishara/fraud-detection-clustering-anomaly-analysis#Exploratory-Data-Analysis-(EDA)
+https://www.kaggle.com/code/mllion/bank-transaction-eda-for-fraud-detection
